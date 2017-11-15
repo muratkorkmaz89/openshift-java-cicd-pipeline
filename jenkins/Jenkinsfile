@@ -1,0 +1,49 @@
+pipeline {
+    agent any
+    
+    tools {
+        maven 'Maven 3.5.0' 
+    }
+    
+    triggers {
+        pollSCM('H/5 * * * *')
+    }
+    
+    stages {
+		 
+        stage('Test') {
+            steps {
+                configFileProvider(
+                    [configFile(fileId: 'maven-settings', variable: 'MAVEN_SETTINGS')]) {
+                    sh "mvn -s $MAVEN_SETTINGS test"
+                }
+				
+            }
+         }
+         
+         stage('Analyse') {
+            steps {
+                configFileProvider(
+                    [configFile(fileId: 'maven-settings', variable: 'MAVEN_SETTINGS')]) {
+                    sh "mvn -s $MAVEN_SETTINGS sonar:sonar -Dsonar.host.url=http://sonarqube:9000 -DskipTests=true"
+                }
+            }
+         }
+         
+        stage('Build') {
+            steps {
+                configFileProvider(
+                    [configFile(fileId: 'maven-settings', variable: 'MAVEN_SETTINGS')]) {
+                    sh "mvn -s $MAVEN_SETTINGS clean install -DskipTests=true"
+                }
+            }
+        }
+        
+         stage('Deploy DEV') {
+            steps {
+                sh "oc start-build payara-reference --from-file=target/ROOT.war --wait=true"
+                openshiftVerifyDeployment depCfg: 'payara-reference', waitTime: '5', waitUnit: 'min'
+            }
+        }
+    }
+}

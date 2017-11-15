@@ -1,0 +1,249 @@
+apiVersion: v1
+kind: Template
+
+##########################################################
+# OpenShift Deployment Template for java payara project  #
+# CAREFUL! INDENTATION IS HIGHLY IMPORTANT IN THIS FILE! #
+##########################################################
+
+metadata:
+  name: cicd
+  annotations:
+    description: "Creates the CI/CD infrastructure with Jenkins"
+  labels:
+    template: cicd
+    group: cicd
+
+######################
+# Helloworld Service #
+######################
+
+objects:
+
+# Service
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}
+  spec:
+    ports:
+    - name: 8080-tcp
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    selector:
+      app: ${APP_NAME}
+    sessionAffinity: None
+    type: ClusterIP
+
+# Pipeline
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    name: ${APP_NAME}-pipeline
+  spec:
+    runPolicy: Serial
+    source:
+      git:
+        uri: ${GIT_REPO}
+      sourceSecret:
+        name: ${GIT_REPO_SECRET}
+    strategy:
+      jenkinsPipelineStrategy:
+        jenkinsfilePath: ${APP_JENKINSFILE_PATH}
+      type: JenkinsPipeline
+  status:
+    lastVersion: 0
+
+# Image stream
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    name: ${APP_NAME}
+
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    labels:
+      app: ${APP_NAME}
+    name: ${APP_NAME}
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${APP_NAME}:${APP_IMAGE_VERSION}
+    postCommit: {}
+    resources: {}
+    runPolicy: Serial
+    source:
+      dockerfile: |-
+        FROM payara/micro:latest
+        COPY ROOT.war /opt/payara/deployments/ROOT.war
+      binary:
+        asFile: ROOT.war
+      type: Docker
+    strategy:
+      dockerStrategy:
+      type: Docker
+    triggers: {}
+
+# Deployment config
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: ${APP_NAME}
+    name: ${APP_NAME}
+  spec:
+    replicas: 1
+    selector:
+      app: ${APP_NAME}
+      deploymentconfig: ${APP_NAME}
+    strategy:
+      activeDeadlineSeconds: 21600
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: ${APP_NAME}
+          deploymentconfig: ${APP_NAME}
+      spec:
+        containers:
+          - image: ${APP_NAME}:${APP_IMAGE_VERSION}
+            imagePullPolicy: Always
+            name: ${APP_NAME}
+            ports:
+              - containerPort: 8080
+                protocol: TCP
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+            readinessProbe:
+              httpGet:
+                path: ${APP_READINESS_PATH}
+                port: 8080
+              initialDelaySeconds: 30
+              timeoutSeconds: 10
+              periodSeconds: 60
+            livenessProbe:
+              httpGet:
+                path: ${APP_LIVENESS_PATH}
+                port: 8080
+              initialDelaySeconds: 600
+              timeoutSeconds: 10
+              periodSeconds: 60
+            resources:
+              requests:
+                cpu: ${CPU_REQUEST}m
+                memory: ${MEMORY_REQUEST}
+              limits:
+                cpu: ${CPU_LIMIT}m
+                memory: ${MEMORY_LIMIT}
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+      - type: ConfigChange
+      - imageChangeParams:
+          automatic: true
+          containerNames:
+            - ${APP_NAME}
+          from:
+            kind: ImageStreamTag
+            name: ${APP_NAME}:${APP_IMAGE_VERSION}
+        type: ImageChange
+  status: {}
+
+# Route
+- apiVersion: v1
+  kind: Route
+  metadata:
+    name: ${APP_NAME}
+  spec:
+    path: ${APP_PUBLIC_PATH}
+    port:
+      targetPort: 8080-tcp
+    to:
+      kind: Service
+      name: ${APP_NAME}
+      weight: 100
+
+#####################################################
+############ Parameter Configuration ################
+#####################################################
+
+parameters:
+
+- description: App name
+  required: true
+  name: APP_NAME
+  value: 'helloworld'
+
+- description: URI of the git repository
+  required: true
+  name: GIT_REPO
+  value: ''
+
+- description: Secret of the git repository
+  required: true
+  name: GIT_REPO_SECRET
+  value: ''
+
+- description: Path to jenkinsfile in project
+  required: true
+  name: APP_JENKINSFILE_PATH
+  value: 'jenkins/Jenkinsfile'
+
+- description: App image version
+  required: true
+  name: APP_IMAGE_VERSION
+  value: 'latest'
+
+- description: App readiness path
+  required: false
+  name: APP_READINESS_PATH
+  value: '/rest'
+
+- description: App liveness path
+  required: false
+  name: APP_LIVENESS_PATH
+  value: '/rest'
+
+- description: App public path
+  required: true
+  name: APP_PUBLIC_PATH
+  value: '/rest'
+  
+- description: CPU Limit in millicores. 1000 millcores  =  1 core
+  displayName: CPU-Limit
+  required: true
+  name: CPU_LIMIT
+  value: '2000'
+  
+- description: CPU Request in millicores. 1000 millcores  =  1 core
+  displayName: CPU-Request
+  required: true
+  name: CPU_REQUEST
+  value: '250'
+ 
+- description: Memory Limit. Gi = Gibibyte and Mi = Mebibyte
+  displayName: Memory Limit
+  required: true
+  name: MEMORY_LIMIT
+  value: '2Gi'
+  
+- description: Memory Request. Gi = Gibibyte and Mi = Mebibyte
+  displayName: Memory Request
+  required: true
+  name: MEMORY_REQUEST
+  value: '512Mi'
